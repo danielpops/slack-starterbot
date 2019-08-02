@@ -14,18 +14,27 @@ RTM_READ_DELAY = 1 # 1 second delay between reading from RTM
 EXAMPLE_COMMAND = "do"
 MENTION_REGEX = "^<@(|[WU].+?)>(.*)"
 
-def parse_bot_commands(slack_events):
+def parse_event(slack_event):
     """
-        Parses a list of events coming from the Slack RTM API to find bot commands.
-        If a bot command is found, this function returns a tuple of command and channel.
-        If its not found, then this function returns None, None.
+        Parses a list of events coming from the Slack RTM API
     """
-    for event in slack_events:
-        if event["type"] == "message" and not "subtype" in event:
-            user_id, message = parse_direct_mention(event["text"])
-            if user_id == starterbot_id:
-                return message, event["channel"]
-    return None, None
+    if event["type"] == "message" and not "subtype" in event and not "bot_id" in event:
+        user_id, message = parse_direct_mention(event["text"])
+        event["is_direct"] = False
+        event["mentioned_user"] = None
+        if user_id == starterbot_id:
+            event["is_direct"] = True
+            event["mentioned_user"] = user_id
+            event["text"] = message
+
+        print event
+        return event
+    elif event["type"] == "reaction_added":
+        pass
+    elif event["type"] == "reaction_removed":
+        pass
+
+    return None
 
 def parse_direct_mention(message_text):
     """
@@ -36,25 +45,40 @@ def parse_direct_mention(message_text):
     # the first group contains the username, the second group contains the remaining message
     return (matches.group(1), matches.group(2).strip()) if matches else (None, None)
 
-def handle_command(command, channel):
+def handle_event(event):
     """
         Executes bot command if the command is known
     """
-    # Default response is help text for the user
-    default_response = "Not sure what you mean. Try *{}*.".format(EXAMPLE_COMMAND)
-
-    # Finds and executes the given command, filling in response
+    # Default to no response
     response = None
-    # This is where you start to implement more commands!
-    if command.startswith(EXAMPLE_COMMAND):
-        response = "Sure...write some more code then I can do that!"
+    
+    if event["is_direct"]:
+        if event["text"].startswith("hi"):
+            response = "hi :wave:"
+            slack_client.api_call(
+                "reactions.add",
+                channel=event["channel"],
+                name="wave",
+                timestamp=event["event_ts"],
+            )
+    else:
+        # Do something else
+        if "love" in event["text"]:
+            slack_client.api_call(
+                "reactions.add",
+                channel=event["channel"],
+                name="heart",
+                timestamp=event["event_ts"],
+            )
 
-    # Sends the response back to the channel
-    slack_client.api_call(
-        "chat.postMessage",
-        channel=channel,
-        text=response or default_response
-    )
+    if response:
+        # Sends the response back to the channel
+        slack_client.api_call(
+            "chat.postMessage",
+            as_user=True,
+            channel=event["channel"],
+            text=response
+        )
 
 if __name__ == "__main__":
     if slack_client.rtm_connect(with_team_state=False):
@@ -62,9 +86,11 @@ if __name__ == "__main__":
         # Read bot's user ID by calling Web API method `auth.test`
         starterbot_id = slack_client.api_call("auth.test")["user_id"]
         while True:
-            command, channel = parse_bot_commands(slack_client.rtm_read())
-            if command:
-                handle_command(command, channel)
+            parsed_event = None
+            for event in slack_client.rtm_read():
+                parsed_event = parse_event(event)
+            if parsed_event:
+                handle_event(parsed_event)
             time.sleep(RTM_READ_DELAY)
     else:
         print("Connection failed. Exception traceback printed above.")
